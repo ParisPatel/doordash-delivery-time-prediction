@@ -1,0 +1,1202 @@
+---
+title: "Project Proposal - Doordash Delivery Time Prediction"
+author: "Paris Patel"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    df_print: paged
+  word_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(modest)
+library(ggplot2)
+```
+
+# Background
+
+The dataset taken into consideration, "Delivery Time Prediction" was provided as a take-home assignment by Doordash during one of their interview processes. This data is a subset of the deliveries received by Doordash in early 2015 in a few subset of cities. It contains about 200,000 rows, each corresponding to one unique delivery and has sixteen different variables detailing order time and delivery time and other related factors. 
+
+# Objective
+
+The delivery time prediction is similar to determining ETA (expected time of arrival at destination) on Google or Apple maps and expected time of order delivery on e-commerce websites like Amazon and Ebay. For such software applications, accuracy of time estimation is essential to enhance customer experience. Hence, purpose of conducting this study is to learn what attributes could affect delivery time prediction and what would be the best way to predict it. It will also help to understand what business tradeoffs will be accepted and what will be the no-goes for the final model to be selected.
+
+# About the data
+
+## Data Source
+
+This data has been selected from the Data Projects section of Stratascratch. The details of the data can be found here: <https://platform.stratascratch.com/data-projects/delivery-duration-prediction>
+
+```{r}
+delivery_data <- read.csv("/Users/parispatel/Desktop/My Folders/Grad/Fall 22/BUS 235C/Project/datasets/historical_data.csv")
+head(delivery_data)
+```
+
+## Data Collection
+
+This data was collected by Doordash as a part of its daily operations. It dates back to early 2015 and includes subset of the cities where Doordash operated.
+
+## Variables
+
+```{r}
+str(delivery_data)
+
+# convert following into categorical values
+# market_id, store_id, store_primary_category, order_protocol
+
+
+```
+
+```{r}
+names(delivery_data)
+```
+
+## Organizing Data
+
+```{r}
+#reorganizing variables 
+delivery_data$market_id = as.factor(delivery_data$market_id)
+delivery_data$store_id = as.factor(delivery_data$store_id)
+delivery_data$store_primary_category = as.factor(delivery_data$store_primary_category)
+delivery_data$order_protocol = as.factor(delivery_data$order_protocol)
+
+delivery_data$created_at = as.POSIXct(delivery_data$created_at, tz = "UTC")
+delivery_data$actual_delivery_time = as.POSIXct(delivery_data$actual_delivery_time, tz = "UTC")
+```
+
+```{r}
+print(head(delivery_data$created_at))
+```
+
+```{r}
+#adding column to calculate actual time taken for delivery
+delivery_data$actual_delivery_duration = as.numeric(difftime(delivery_data$actual_delivery_time, delivery_data$created_at, units = "secs"))
+
+head(delivery_data$actual_delivery_duration)
+```
+
+```{r}
+summary(delivery_data)
+```
+
+```{r}
+#adding a column for busy_dasher_ratio to get % of dashers unavailable during typical working hours
+delivery_data$busy_dasher_ratio = delivery_data$total_busy_dashers/delivery_data$total_onshift_dashers
+head(delivery_data$busy_dasher_ratio)
+```
+
+```{r}
+#estimated time of order placing plus driving time from store to destination
+delivery_data$estimated_non_prep_duration = delivery_data$estimated_order_place_duration + delivery_data$estimated_store_to_consumer_driving_duration
+head(delivery_data$estimated_non_prep_duration)
+```
+
+## Data Cleanup/Handling missing values
+
+```{r}
+#checking for missing values
+colSums(is.na(delivery_data))
+```
+
+```{r}
+#function to identify mode of distribution
+mode <- function(v) {
+  uniqv <- unique(v)
+  uniqv[which.max(tabulate(match(v, uniqv)))]
+}
+```
+
+```{r}
+#replacing missing values of store_primary_category with most frequent value for a given store_id
+store_id_set <- unique(delivery_data$store_id)
+length(store_id_set)
+head(store_id_set)
+store_category_mode <- c()
+filtered_NA <- filter(delivery_data, !is.na(delivery_data$store_primary_category))
+head(filtered_NA$store_primary_category)
+store <-unique(filtered_NA$store_id)
+length(store)
+```
+
+```{r}
+for (id in store) {
+  filtered_set <- filter(filtered_NA, store_id == id)
+  store_category_mode[id] = as.character(mode(filtered_set$store_primary_category))
+}
+print(head(store_category_mode))
+```
+
+```{r}
+  delivery_data$store_primary_category <- as.character(delivery_data$store_primary_category)
+
+for(id in store) {
+  delivery_data$store_primary_category[is.na(delivery_data$store_primary_category) & delivery_data$store_id == id] <- store_category_mode[id]
+}
+
+# using exclude = NULL to add a factor level for missing values.
+delivery_data$store_primary_category <- factor(delivery_data$store_primary_category, exclude = NULL)
+```
+
+```{r}
+colSums(is.na(delivery_data))
+```
+
+# Exploratory Data Analysis
+
+## Categorical Values
+
+```{r}
+data.frame(
+  "Attributes" = c("# Markets", 
+                   "# Stores", 
+                   "# Cuisines", 
+                   "# Order Protocols"),
+  "Total Count" = c(length(unique(delivery_data$market_id)),
+                    length(unique(delivery_data$store_id)),
+                    length(unique(delivery_data$store_primary_category)),
+                    length(unique(delivery_data$order_protocol)))
+)
+```
+
+```{r}
+par(mfrow = c(3,3))
+boxplot(delivery_data$total_items, main = "Total items in order")
+boxplot(delivery_data$num_distinct_items, main = "Total unique items in order")
+boxplot(delivery_data$subtotal, main = "Subtotal of each order")
+boxplot(delivery_data$min_item_price, main = "Minimum price of an item in order")
+boxplot(delivery_data$max_item_price, main = "Max price of an item in order")
+boxplot(delivery_data$estimated_order_place_duration, main = "Estimated duration of placing an order")
+boxplot(delivery_data$estimated_store_to_consumer_driving_duration, main = "Estimated driving time")
+boxplot(delivery_data$actual_delivery_time, main = "Actual Delivery time")
+boxplot(delivery_data$busy_dasher_ratio, main = "Busy-to-available Dasher ratio")
+```
+
+```{r}
+library(ggplot2)
+
+boxplot(delivery_data$actual_delivery_duration, main = "Actual Delivery Duration")
+(ggplot(delivery_data, aes(x=actual_delivery_duration)) + geom_bar(fill="black"))
+boxplot(delivery_data$actual_delivery_duration, main = "Actual Delivery Duration", ylim = c(50,20000))
+(ggplot(delivery_data, aes(x=actual_delivery_duration)) + geom_bar(fill="black") + xlim(50,15000))
+```
+
+```{r}
+library(lessR)
+
+PieChart(order_protocol, data = delivery_data, main = "Use of different Order Protocols")
+```
+
+## Central Tendencies
+
+```{r}
+summary(delivery_data)
+```
+
+## Preparing data for Model Building
+
+As observed from boxplot of `actual_delivery_duration`, I will remove the one extreme outlier
+
+```{r}
+#creating dummy variables for categorical variable order_protocol
+delivery_data$order_protocol <- factor(delivery_data$order_protocol, exclude = NULL)
+order_protocol_dummy <- model.matrix(~order_protocol-1, data = delivery_data)
+# -1 so that intercept dummy column is not created
+order_protocol_dummy <- subset(order_protocol_dummy, select= -c(order_protocolNA))
+dim(order_protocol_dummy)
+```
+
+```{r}
+#creating dummy variables for categorical variable market_id
+delivery_data$market_id <- factor(delivery_data$market_id, exclude = NULL)
+market_id_dummy <- model.matrix(~market_id-1, data = delivery_data)
+market_id_dummy <- subset(market_id_dummy, select= -c(market_idNA))
+dim(market_id_dummy)
+```
+
+```{r}
+#creating dummy variables for categorical variable store_primary_category
+store_primary_category_dummy <- model.matrix(~store_primary_category-1, data = delivery_data)
+store_primary_category_dummy <- subset(store_primary_category_dummy, select= -c(store_primary_categoryNA))
+dim(store_primary_category_dummy)
+```
+
+```{r}
+# removing original columns of categorical variables
+model_data = subset(delivery_data, select = -c(created_at, market_id, store_id, store_primary_category, actual_delivery_time, order_protocol))
+```
+
+```{r}
+#library(dplyr)
+model_data = data.frame(model_data, order_protocol_dummy, market_id_dummy, store_primary_category_dummy)
+```
+
+```{r}
+dim(model_data)
+```
+
+```{r}
+summary(model_data)
+```
+
+### Infinite and Missing Value Corrections
+
+```{r}
+# treating infinite values generated in busy_dasher_ratio
+summary(model_data$busy_dasher_ratio)
+sum(is.infinite(model_data$busy_dasher_ratio))
+
+#replacing infinite values with nan
+model_data$busy_dasher_ratio[is.infinite(model_data$busy_dasher_ratio)] <- NA
+
+summary(model_data$busy_dasher_ratio)
+sum(is.infinite(model_data$busy_dasher_ratio))
+
+sum(is.na(model_data))
+
+model_data <- tidyr::drop_na(model_data)
+dim(model_data)
+sum(is.na(model_data))
+```
+
+```{r}
+summary(model_data$actual_delivery_duration)
+```
+
+### Removing redundancy
+
+```{r}
+#Takes too much time for computation, hence ran it only once and saved the output.
+
+library(corrplot)
+
+#corrplot(cor(model_data), type = "lower", tl.cex = 0.2)
+```
+
+Removing store_primary_categoryindonesian since its standard deviation is zero.
+
+```{r}
+model_data <- subset(model_data, select = -store_primary_categoryindonesian)
+dim(model_data)
+```
+
+Removing correlated data now. I'll keep a threshold of 0.5 to consider it as highly correlated variables.
+
+```{r}
+# getting top n correlations 
+
+get_top_correlations <- function(df, n) {
+  abs_corr <- cor(df)
+  abs_corr[upper.tri(abs_corr, diag = TRUE)] <- NA
+  abs_corr <- reshape2::melt(abs_corr, na.rm = TRUE)
+  abs_corr$value <- abs(abs_corr$value)
+  abs_corr <- abs_corr[order(-abs_corr$value),]
+  return(head(abs_corr,n))
+}
+
+```
+
+```{r}
+get_top_correlations(model_data,20)
+```
+
+`total_busy_dashers` and `total_onshift_dashers` are actually represented by `busy_dashers_ratio`. Additionally, markets are also correlated to each other. `store_primary_categoryindonesian` has zero standard deviation.
+
+```{r}
+model_data = subset(delivery_data, select = -c(created_at, market_id, store_id, store_primary_category, actual_delivery_time, order_protocol))
+
+#library(dplyr)
+model_data = data.frame(model_data, order_protocol_dummy, store_primary_category_dummy)
+
+model_data = subset(model_data, select = -c(total_onshift_dashers, total_busy_dashers, store_primary_categoryindonesian, estimated_non_prep_duration))
+#replacing infinite values with nan
+
+model_data$busy_dasher_ratio[is.infinite(model_data$busy_dasher_ratio)] <- NA
+
+model_data <- tidyr::drop_na(model_data)
+dim(model_data)
+sum(is.na(model_data))
+```
+
+```{r}
+get_top_correlations(model_data,20)
+```
+
+`order_protocol` are correlated to each other. Hence dropping that too.
+
+```{r}
+model_data = subset(delivery_data, select = -c(created_at, market_id, store_id, store_primary_category, actual_delivery_time, order_protocol))
+
+#library(dplyr)
+model_data = data.frame(model_data, store_primary_category_dummy)
+
+model_data = subset(model_data, select = -c(total_onshift_dashers, total_busy_dashers, store_primary_categoryindonesian, estimated_non_prep_duration))
+
+#replacing infinite values with nan
+model_data$busy_dasher_ratio[is.infinite(model_data$busy_dasher_ratio)] <- NA
+
+model_data <- tidyr::drop_na(model_data)
+dim(model_data)
+sum(is.na(model_data))
+```
+
+```{r}
+get_top_correlations(model_data,20)
+```
+
+```{r}
+model_data$percent_distinct_item_total = model_data$num_distinct_items/model_data$total_items
+model_data$avg_price_per_item = model_data$subtotal/model_data$total_items
+model_data$price_range_of_items = model_data$max_item_price - model_data$min_item_price
+model_data <- subset(model_data, select = -c(num_distinct_items, subtotal, max_item_price, min_item_price))
+```
+
+```{r}
+get_top_correlations(model_data,20)
+```
+
+```{r}
+dim(model_data)
+```
+
+### Multicollinearity Check
+
+Variance Inflation Factor.
+
+```{r}
+library(car)
+
+vif_model <- lm(actual_delivery_duration~., model_data)
+sort(vif(vif_model), decreasing = TRUE)
+
+barplot(vif(vif_model), horiz = TRUE, col = "blue", main = "Variance Inflation Factor")
+#v1 <- as.data.frame(vif(vif_model))
+#filter(v1, vif(vif_model)>15)
+```
+
+```{r}
+#removing variables with high Variance Inflation Factor
+aftervif = data.frame()
+drop = TRUE
+threshold = 15
+while(drop == TRUE) {
+  vfit = vif(vif_model)
+  
+  aftervif = plyr::rbind.fill(aftervif,as.data.frame(t(vfit)))
+  if(max(vfit)>threshold) {
+    vif_model = update(vif_model,as.formula(paste(".","~",".","-",names(which.max(vfit)))))
+  }
+  else { drop = FALSE}
+}
+
+t_aftervif <- as.data.frame(t(aftervif))
+t_aftervif[order(-t_aftervif$V1),]
+
+barplot(vif(vif_model), horiz = TRUE, col = "blue", main = "Variance Inflation Factor")
+```
+
+```{r}
+model_data <- subset(model_data, select = -c(store_primary_categoryamerican))
+dim(model_data)
+```
+
+```{r}
+library(ggplot2)
+
+boxplot(model_data$actual_delivery_duration, main = "Actual Delivery Duration")
+(ggplot(model_data, aes(x=actual_delivery_duration)) + geom_bar(fill="black"))
+boxplot(model_data$actual_delivery_duration, main = "Actual Delivery Duration", ylim = c(50,60000))
+(ggplot(model_data, aes(x=actual_delivery_duration)) + geom_bar(fill="black") + xlim(50,15000))
+```
+
+#### Removing data with actual_delivery_time \> 60000 as outliers
+
+```{r}
+max(model_data$actual_delivery_duration)
+model_data <- subset(model_data, model_data$actual_delivery_duration < 60000)
+dim(model_data)
+```
+
+# Feature Selection Using Forward step Selection Method
+
+Using forward step selection method to find set of predictors that best explains the variance in the response.
+
+```{r}
+library(leaps)
+
+feat_slct <- regsubsets(actual_delivery_duration~., data = model_data, nvmax = 80, method = "forward", really.big = TRUE)
+
+res.sum <- summary(feat_slct)
+```
+
+```{r}
+par(mfrow = c(1,2))
+plot(feat_slct, scale = "adjr2", main = "Adjusted R-squared")
+plot(feat_slct, scale = "r2", main = "R-Squared")
+```
+
+```{r}
+plot(sqrt(res.sum$rss/nrow(model_data)), type = "l", ylab = "RMSE", main = "RMSE Trend with number of variables")
+```
+
+```{r}
+mean(sqrt(res.sum$rss/nrow(model_data)))
+median(sqrt(res.sum$rss/nrow(model_data)))
+min(sqrt(res.sum$rss/nrow(model_data)))
+```
+
+```{r}
+which.max (res.sum$adjr2)
+par(mfrow =c(1,2))
+plot(sqrt(res.sum$rss/nrow(model_data)) ,xlab=" Number of Variables ",ylab=" RMSE", type="l")
+plot(res.sum$adjr2 ,xlab =" Number of Variables ", ylab=" Adjusted RSq",type="l")   
+points (58, res.sum$adjr2[58], col ="red",cex = 1, pch = 20)
+```
+
+```{r}
+coef(feat_slct, 20)
+print("'''''''''")
+coef(feat_slct, 40)
+print("'''''''''")
+coef(feat_slct, 58)
+```
+
+```{r}
+feat_model_20 <- lm(actual_delivery_duration ~ total_items
+                    + total_outstanding_orders
+                    + estimated_order_place_duration
+                    + estimated_store_to_consumer_driving_duration
+                    + busy_dasher_ratio
+                    + store_primary_categoryalcohol
+                    + store_primary_categorybarbecue
+                    + store_primary_categorybrazilian
+                    + store_primary_categorycafe
+                    + store_primary_categoryjapanese
+                    + store_primary_categorymexican
+                    + store_primary_categorypersian
+                    + store_primary_categorypizza
+                    + store_primary_categorysalad
+                    + store_primary_categorysandwich
+                    + store_primary_categoryseafood
+                    + store_primary_categorytapas
+                    + store_primary_categoryvietnamese
+                    + avg_price_per_item
+                    + price_range_of_items,
+                    data = model_data )
+
+
+predicted_data_20 <- data.frame(pred = predict(feat_model_20, model_data), actual = model_data$actual_delivery_duration)
+
+RMSE_20 <- sqrt(mean((predicted_data_20$actual - predicted_data_20$pred)^2))
+RMSE_20
+```
+
+```{r}
+feat_model_40 <- lm(actual_delivery_duration~ total_items 
+                 + total_outstanding_orders 
+                 + estimated_order_place_duration 
+                 + estimated_store_to_consumer_driving_duration 
+                 + busy_dasher_ratio 
+                 + store_primary_categoryalcohol 
+                 + store_primary_categoryargentine
+                 + store_primary_categoryasian 
+                 + store_primary_categorybarbecue
+                 + store_primary_categorybrazilian 
+                 + store_primary_categorybreakfast 
+                 + store_primary_categorybubble.tea 
+                 + store_primary_categoryburger
+                 + store_primary_categorycafe 
+                 + store_primary_categorychinese
+                 + store_primary_categoryconvenience.store        
+                 + store_primary_categorydessert
+                 + store_primary_categorydim.sum        
+                 + store_primary_categoryfilipino
+                 + store_primary_categoryfrench        
+                 + store_primary_categorygreek
+                 + store_primary_categoryhawaiian
+                 + store_primary_categoryindian
+                 + store_primary_categoryitalian
+                 + store_primary_categoryjapanese  
+                 + store_primary_categorykorean 
+                 + store_primary_categorymediterranean        
+                 + store_primary_categorymexican 
+                 + store_primary_categorypasta         
+                 + store_primary_categorypersian 
+                 + store_primary_categorypizza       
+                 + store_primary_categorysalad 
+                 + store_primary_categorysandwich        
+                 + store_primary_categoryseafood
+                 + store_primary_categorysouthern       
+                 + store_primary_categorytapas       
+                 + store_primary_categoryturkish 
+                 + store_primary_categoryvietnamese     
+                 + avg_price_per_item 
+                 + price_range_of_items, 
+                 data = model_data )
+
+predicted_data_40 <- data.frame(pred = predict(feat_model_40, model_data), actual = model_data$actual_delivery_duration)
+
+RMSE_40 <- sqrt(mean((predicted_data_40$actual - predicted_data_40$pred)^2))
+RMSE_40
+```
+
+```{r}
+feat_model_58 <- lm(actual_delivery_duration ~ total_items
+                    + total_outstanding_orders
+                    + estimated_order_place_duration
+                    + estimated_store_to_consumer_driving_duration
+                    + busy_dasher_ratio
+                    + store_primary_categoryafghan
+                    + store_primary_categoryafrican
+                    + store_primary_categoryalcohol
+                    + store_primary_categoryargentine
+                    + store_primary_categoryasian
+                    + store_primary_categorybarbecue
+                    + store_primary_categorybrazilian
+                    + store_primary_categorybreakfast
+                    + store_primary_categorybubble.tea 
+                    + store_primary_categoryburger 
+                    + store_primary_categorycafe 
+                    + store_primary_categorycajun 
+                    + store_primary_categorychinese 
+                    + store_primary_categorycomfort.food 
+                    + store_primary_categoryconvenience.store
+                    + store_primary_categorydessert 
+                    + store_primary_categorydim.sum 
+                    + store_primary_categoryeuropean 
+                    + store_primary_categoryfilipino 
+                    + store_primary_categoryfrench 
+                    + store_primary_categorygerman 
+                    + store_primary_categorygreek 
+                    + store_primary_categoryhawaiian 
+                    + store_primary_categoryindian 
+                    + store_primary_categoryitalian 
+                    + store_primary_categoryjapanese 
+                    + store_primary_categorykorean
+                    + store_primary_categorykosher 
+                    + store_primary_categorylatin.american 
+                    + store_primary_categorymediterranean 
+                    + store_primary_categorymexican 
+                    + store_primary_categorypasta 
+                    + store_primary_categorypersian 
+                    + store_primary_categorypizza 
+                    + store_primary_categoryrussian 
+                    + store_primary_categorysalad 
+                    + store_primary_categorysandwich 
+                    + store_primary_categoryseafood 
+                    + store_primary_categorysingaporean 
+                    + store_primary_categorysmoothie
+                    + store_primary_categorysoup 
+                    + store_primary_categorysouthern 
+                    + store_primary_categoryspanish 
+                    + store_primary_categorysteak 
+                    + store_primary_categorytapas 
+                    + store_primary_categorythai 
+                    + store_primary_categoryturkish 
+                    + store_primary_categoryvegan 
+                    + store_primary_categoryvegetarian 
+                    + store_primary_categoryvietnamese 
+                    + percent_distinct_item_total 
+                    + avg_price_per_item 
+                    + price_range_of_items,
+                    data = model_data )
+
+predicted_data_58 <- data.frame(pred = predict(feat_model_58, model_data), actual = model_data$actual_delivery_duration)
+
+RMSE_58 <- sqrt(mean((predicted_data_58$actual - predicted_data_58$pred)^2))
+RMSE_58
+```
+
+```{r}
+final_data_20 <- subset(model_data, 
+                     select = c(total_items, 
+                                total_outstanding_orders,
+                                estimated_order_place_duration,
+                                estimated_store_to_consumer_driving_duration,
+                                busy_dasher_ratio, 
+                                store_primary_categoryalcohol,
+                                store_primary_categorybarbecue, 
+                                store_primary_categorybrazilian, 
+                                store_primary_categorycafe, 
+                                store_primary_categoryjapanese, 
+                                store_primary_categorymexican, 
+                                store_primary_categorypersian, 
+                                store_primary_categorypizza, 
+                                store_primary_categorysalad, 
+                                store_primary_categorysandwich, 
+                                store_primary_categoryseafood, 
+                                store_primary_categorytapas, 
+                                store_primary_categoryvietnamese, 
+                                avg_price_per_item, 
+                                price_range_of_items,
+                                actual_delivery_duration
+                     ))
+```
+
+```{r}
+final_data_40 <- subset(model_data, 
+                     select = c(
+                       total_items,
+                       total_outstanding_orders,
+                       estimated_order_place_duration,
+                       estimated_store_to_consumer_driving_duration,
+                       busy_dasher_ratio ,
+                       store_primary_categoryalcohol ,
+                       store_primary_categoryargentine,
+                       store_primary_categoryasian ,
+                       store_primary_categorybarbecue,
+                       store_primary_categorybrazilian ,
+                       store_primary_categorybreakfast,
+                       store_primary_categorybubble.tea ,
+                       store_primary_categoryburger,
+                       store_primary_categorycafe ,
+                       store_primary_categorychinese,
+                       store_primary_categoryconvenience.store ,
+                       store_primary_categorydessert,
+                       store_primary_categorydim.sum,
+                       store_primary_categoryfilipino,
+                       store_primary_categoryfrench   ,
+                       store_primary_categorygreek,
+                       store_primary_categoryhawaiian,
+                       store_primary_categoryindian ,
+                       store_primary_categoryitalian,
+                       store_primary_categoryjapanese,  
+                       store_primary_categorykorean ,
+                       store_primary_categorymediterranean,   
+                       store_primary_categorymexican ,
+                       store_primary_categorypasta ,
+                       store_primary_categorypersian, 
+                       store_primary_categorypizza  ,
+                       store_primary_categorysalad ,
+                       store_primary_categorysandwich,   
+                       store_primary_categoryseafood,
+                       store_primary_categorysouthern,     
+                       store_primary_categorytapas ,
+                       store_primary_categoryturkish, 
+                       store_primary_categoryvietnamese, 
+                       avg_price_per_item ,
+                       price_range_of_items,
+                       actual_delivery_duration
+                     ))
+dim(final_data)
+```
+
+```{r}
+final_data_58 <- subset(model_data, 
+                     select = c(total_items,
+                      total_outstanding_orders,
+                      estimated_order_place_duration,
+                      estimated_store_to_consumer_driving_duration,
+                      busy_dasher_ratio,
+                      store_primary_categoryafghan,
+                      store_primary_categoryafrican,
+                      store_primary_categoryalcohol,
+                      store_primary_categoryargentine,
+                      store_primary_categoryasian,
+                      store_primary_categorybarbecue,
+                      store_primary_categorybrazilian,
+                      store_primary_categorybreakfast,
+                      store_primary_categorybubble.tea, 
+                      store_primary_categoryburger, 
+                      store_primary_categorycafe, 
+                      store_primary_categorycajun, 
+                      store_primary_categorychinese, 
+                      store_primary_categorycomfort.food, 
+                      store_primary_categoryconvenience.store,
+                      store_primary_categorydessert ,
+                      store_primary_categorydim.sum ,
+                      store_primary_categoryeuropean ,
+                      store_primary_categoryfilipino ,
+                      store_primary_categoryfrench ,
+                      store_primary_categorygerman ,
+                      store_primary_categorygreek ,
+                      store_primary_categoryhawaiian, 
+                      store_primary_categoryindian ,
+                      store_primary_categoryitalian ,
+                      store_primary_categoryjapanese ,
+                      store_primary_categorykorean,
+                      store_primary_categorykosher ,
+                      store_primary_categorylatin.american ,
+                      store_primary_categorymediterranean ,
+                      store_primary_categorymexican ,
+                      store_primary_categorypasta ,
+                      store_primary_categorypersian, 
+                      store_primary_categorypizza ,
+                      store_primary_categoryrussian, 
+                      store_primary_categorysalad ,
+                      store_primary_categorysandwich, 
+                      store_primary_categoryseafood ,
+                      store_primary_categorysingaporean, 
+                      store_primary_categorysmoothie,
+                      store_primary_categorysoup ,
+                      store_primary_categorysouthern ,
+                      store_primary_categoryspanish ,
+                      store_primary_categorysteak ,
+                      store_primary_categorytapas ,
+                      store_primary_categorythai ,
+                      store_primary_categoryturkish, 
+                      store_primary_categoryvegan, 
+                      store_primary_categoryvegetarian, 
+                      store_primary_categoryvietnamese ,
+                      percent_distinct_item_total ,
+                      avg_price_per_item ,
+                      price_range_of_items,
+                      actual_delivery_duration
+                     ))
+```
+
+# Model Building
+
+## Standardization
+
+```{r}
+library(rsample)
+set.seed(8)
+splitset <- initial_split(final_data_20, prop = 0.8)
+delivery_train_20 = training(splitset)
+delivery_test_20 = testing(splitset)
+dim(delivery_train_20)
+dim(delivery_test_20)
+```
+
+```{r}
+x_bar_20 <- mean(delivery_train_20[,"actual_delivery_duration"])
+sigma_x_20 <- sd(delivery_train_20[,"actual_delivery_duration"])
+
+for (i in 1:(ncol(delivery_test_20)-1)) {
+  delivery_test_20[,i] = scale(delivery_test_20[,i], center = mean(delivery_train_20[,i]), scale = sd(delivery_train_20[,i]))
+}
+head(delivery_test_20)
+```
+
+```{r}
+# scaling all the variables to bring them into similar range and making interpretation easy
+
+for (i in 1:(ncol(delivery_train_20))) {
+    delivery_train_20[, i] = scale(delivery_train_20[, i])
+}
+head(delivery_train_20)
+```
+
+```{r}
+library(rsample)
+set.seed(8)
+splitset <- initial_split(final_data_40, prop = 0.8)
+delivery_train_40 = training(splitset)
+delivery_test_40 = testing(splitset)
+dim(delivery_train_40)
+dim(delivery_test_40)
+```
+
+```{r}
+x_bar_40 <- mean(delivery_train_40[,"actual_delivery_duration"])
+sigma_x_40 <- sd(delivery_train_40[,"actual_delivery_duration"])
+
+for (i in 1:(ncol(delivery_test_40)-1)) {
+  delivery_test_40[,i] = scale(delivery_test_40[,i], center = mean(delivery_train_40[,i]), scale = sd(delivery_train_40[,i]))
+}
+head(delivery_test_40)
+```
+
+```{r}
+# scaling all the variables to bring them into similar range and making interpretation easy
+
+for (i in 1:(ncol(delivery_train_40))) {
+    delivery_train_40[, i] = scale(delivery_train_40[, i])
+}
+head(delivery_train_40)
+```
+
+```{r}
+library(rsample)
+set.seed(8)
+splitset <- initial_split(final_data_58, prop = 0.8)
+delivery_train_58 = training(splitset)
+delivery_test_58 = testing(splitset)
+dim(delivery_train_58)
+dim(delivery_test_58)
+```
+
+```{r}
+x_bar_58 <- mean(delivery_train_58[,"actual_delivery_duration"])
+sigma_x_58 <- sd(delivery_train_58[,"actual_delivery_duration"])
+
+for (i in 1:(ncol(delivery_test_58)-1)) {
+  delivery_test_58[,i] = scale(delivery_test_58[,i], center = mean(delivery_train_58[,i]), scale = sd(delivery_train_58[,i]))
+}
+head(delivery_test_58)
+```
+
+```{r}
+# scaling all the variables to bring them into similar range and making interpretation easy
+
+for (i in 1:(ncol(delivery_train_58))) {
+    delivery_train_58[, i] = scale(delivery_train_58[, i])
+}
+head(delivery_train_58)
+```
+
+## Linear Regression
+
+```{r}
+linear_model_20 <- lm(actual_delivery_duration ~., 
+                   data = delivery_train_20 )
+summary(linear_model_20)
+```
+
+```{r}
+linear_model_40 <- lm(actual_delivery_duration ~., 
+                   data = delivery_train_40 )
+summary(linear_model_40)
+```
+
+```{r}
+linear_model_58 <- lm(actual_delivery_duration ~., 
+                   data = delivery_train_58 )
+summary(linear_model_58)
+```
+
+```{r}
+par(mfrow = c(2,2))
+plot(linear_model_20)
+```
+
+```{r}
+par(mfrow = c(2,2))
+plot(linear_model_40)
+```
+
+```{r}
+par(mfrow = c(2,2))
+plot(linear_model_58)
+```
+
+## Random Forest
+
+```{r}
+library(ranger)
+rf_model_20 <- ranger(x = delivery_train_20[-c(ncol(delivery_train_20))],
+                   y = delivery_train_20$actual_delivery_duration,
+                   seed = 123,
+                   num.tree = 500,
+                   write.forest = TRUE,
+                   replace = TRUE,
+                   importance = "impurity")
+```
+
+```{r}
+rf_model_20
+```
+
+```{r}
+res_20 <- delivery_train_20$actual_delivery_duration - rf_model_20$predictions
+qqnorm(res_20)
+qqline(res_20)
+```
+
+```{r}
+plot(res_20, pch = 20, cex = 1, main = "Residual vs Fitted")
+```
+
+```{r}
+rf_model_40 <- ranger(x = delivery_train_40[-c(ncol(delivery_train_40))],
+                   y = delivery_train_40$actual_delivery_duration,
+                   seed = 123,
+                   num.tree = 500,
+                   write.forest = TRUE,
+                   replace = TRUE,
+                   importance = "impurity")
+```
+
+```{r}
+rf_model_40
+```
+
+```{r}
+res_40 <- delivery_train_40$actual_delivery_duration - rf_model_40$predictions
+qqnorm(res_40)
+qqline(res_40)
+```
+
+```{r}
+plot(res_40, pch = 20, cex = 1, main = "Residual vs Fitted")
+```
+
+```{r}
+rf_model_58 <- ranger(x = delivery_train_58[-c(ncol(delivery_train_58))],
+                   y = delivery_train_58$actual_delivery_duration,
+                   seed = 123,
+                   num.tree = 500,
+                   write.forest = TRUE,
+                   replace = TRUE,
+                   importance = "impurity")
+```
+
+```{r}
+rf_model_58
+```
+
+```{r}
+res_58 <- delivery_train_58$actual_delivery_duration - rf_model_58$predictions
+qqnorm(res_58)
+qqline(res_58)
+```
+
+```{r}
+plot(res_58, pch = 20, cex = 1, main = "Residual vs Fitted")
+```
+
+## Gradient Boosting
+
+Tried 1000 trees first, and there was no improvement after 550 trees. hence seelct 500 trees for final model.
+
+```{r}
+library(gbm)
+set.seed(123)
+gb_model_20 <- gbm(actual_delivery_duration ~.,
+                data = delivery_train_20,
+                distribution = "gaussian",
+                n.trees = 500,
+                shrinkage = 0.01)
+summary(gb_model_20)
+```
+
+```{r}
+head(sqrt(gb_model_20$train.error))
+sqrt(mean(gb_model_20$train.error))
+head(gb_model_20$fit)
+```
+
+```{r}
+plot(sqrt(gb_model_20$train.error), ylab = "RMSE for each step", main = "RMSE Plot")
+```
+
+```{r}
+res_gb_20 <- delivery_train_20$actual_delivery_duration - predict(gb_model_20, delivery_train_20)
+qqnorm(res_gb_20)
+qqline(res_gb_20)
+```
+
+```{r}
+plot(res_gb_20, pch = 20, cex = 1, main = "Residual vs Fitted")
+```
+
+```{r}
+set.seed(43)
+gb_model_40 <- gbm.fit(x = delivery_train_40[-c(ncol(delivery_train_40))],
+                y = delivery_train_40$actual_delivery_duration,
+                distribution = "gaussian",
+                n.trees = 500,
+                shrinkage = 0.01)
+summary(gb_model_40)
+```
+
+```{r}
+head(sqrt(gb_model_40$train.error))
+sqrt(mean(gb_model_40$train.error))
+head(gb_model_40$fit)
+```
+
+```{r}
+plot(sqrt(gb_model_40$train.error), ylab = "RMSE for each step", main = "RMSE Plot")
+```
+
+```{r}
+res_gb_40 <- delivery_train_40$actual_delivery_duration - predict(gb_model_40, delivery_train_40)
+qqnorm(res_gb_40)
+qqline(res_gb_40)
+```
+
+```{r}
+plot(res_gb_40, pch = 20, cex = 1, main = "Residual vs Fitted")
+```
+
+```{r}
+set.seed(25)
+gb_model_58 <- gbm.fit(x = delivery_train_58[-c(ncol(delivery_train_58))],
+                y = delivery_train_58$actual_delivery_duration,
+                distribution = "gaussian",
+                n.trees = 500,
+                shrinkage = 0.01)
+summary(gb_model_58)
+```
+
+```{r}
+head(sqrt(gb_model_58$train.error))
+sqrt(mean(gb_model_58$train.error))
+head(gb_model_58$fit)
+```
+
+```{r}
+plot(sqrt(gb_model_58$train.error), ylab = "RMSE for each step", main = "RMSE Plot")
+```
+
+```{r}
+res_gb_58 <- delivery_train_58$actual_delivery_duration - predict(gb_model_58, delivery_train_58)
+qqnorm(res_gb_58)
+qqline(res_gb_58)
+```
+
+```{r}
+plot(res_gb_58, pch = 20, cex = 1, main = "Residual vs Fitted")
+```
+
+## Prediction
+
+### In-sample
+
+```{r}
+linear_pred_train_20 <- predict(linear_model_20, delivery_train_20)
+rf_pred_train_20 <- predict(rf_model_20, delivery_train_20)$predictions
+gb_pred_train_20 <- predict(gb_model_20, delivery_train_20)
+```
+
+```{r}
+linear_pred_train_40 <- predict(linear_model_40, delivery_train_40)
+rf_pred_train_40 <- predict(rf_model_40, delivery_train_40)$predictions
+gb_pred_train_40 <- predict(gb_model_40, delivery_train_40)
+```
+
+```{r}
+linear_pred_train_58 <- predict(linear_model_58, delivery_train_58)
+rf_pred_train_58 <- predict(rf_model_58, delivery_train_58)$predictions
+gb_pred_train_58 <- predict(gb_model_58, delivery_train_58)
+```
+
+### Unscaling
+
+```{r}
+unscaling <- function(vector,xbar,sigma_x) {
+  return((vector * sigma_x) + x_bar)
+}
+```
+
+``` {r}
+delivery_train_20$actual_delivery_duration <- unscaling(delivery_train_20$actual_delivery_duration,x_bar_20, sigma_x_20)
+delivery_train_40$actual_delivery_duration <- unscaling(delivery_train_40$actual_delivery_duration,x_bar_40, sigma_x_40)
+delivery_train_58$actual_delivery_duration <- unscaling(delivery_train_58$actual_delivery_duration,x_bar_58, sigma_x_58)
+```
+
+``` {r}
+linear_pred_train_20 <- unscaling(linear_pred_train_20,x_bar_20, sigma_x_20)
+rf_pred_train_20 <- unscaling(rf_pred_train_20,x_bar_20, sigma_x_20)
+gb_pred_train_20 <- unscaling(gb_pred_train_20,x_bar_20, sigma_x_20)
+
+linear_pred_train_40 <- unscaling(linear_pred_train_40,x_bar_40, sigma_x_40)
+rf_pred_train_40 <- unscaling(rf_pred_train_40,x_bar_40, sigma_x_40)
+gb_pred_train_40 <- unscaling(gb_pred_train_40,x_bar_40, sigma_x_40)
+
+linear_pred_train_58 <- unscaling(linear_pred_train_58,x_bar_58, sigma_x_58)
+rf_pred_train_58 <- unscaling(rf_pred_train_58,x_bar_58, sigma_x_58)
+gb_pred_train_58 <- unscaling(gb_pred_train_58,x_bar_58, sigma_x_58)
+
+head(delivery_train_20$actual_delivery_duration)
+```
+
+```{r}
+
+data.frame(
+  No_of_Variables = c(20,40,58),
+  Linear.RMSE = c(sqrt(mean((delivery_train_20$actual_delivery_duration - linear_pred_train_20)^2)),
+                  sqrt(mean((delivery_train_40$actual_delivery_duration - linear_pred_train_40)^2)),
+                  sqrt(mean((delivery_train_58$actual_delivery_duration - linear_pred_train_58)^2))),
+  Random_forest.RMSE = c(sqrt(mean((delivery_train_20$actual_delivery_duration - rf_pred_train_20)^2)),
+                         sqrt(mean((delivery_train_40$actual_delivery_duration - rf_pred_train_40)^2)),
+                         sqrt(mean((delivery_train_58$actual_delivery_duration - rf_pred_train_58)^2))),
+  Gradient_boost.RMSE = c(sqrt(mean((delivery_train_20$actual_delivery_duration - gb_pred_train_20)^2)),
+                          sqrt(mean((delivery_train_40$actual_delivery_duration - gb_pred_train_40)^2)),
+                          sqrt(mean((delivery_train_58$actual_delivery_duration - gb_pred_train_58)^2)))
+)
+```
+
+### Out-of-sample
+
+```{r}
+linear_pred_20 <- predict(linear_model_20, delivery_test_20)
+rf_pred_20 <- predict(rf_model_20, delivery_test_20)$predictions
+gb_pred_20 <- predict(gb_model_20, delivery_test_20)
+```
+
+```{r}
+linear_pred_40 <- predict(linear_model_40, delivery_test_40)
+rf_pred_40 <- predict(rf_model_40, delivery_test_40)$predictions
+gb_pred_40 <- predict(gb_model_40, delivery_test_40)
+```
+
+```{r}
+linear_pred_58 <- predict(linear_model_58, delivery_test_58)
+rf_pred_58 <- predict(rf_model_58, delivery_test_58)$predictions
+gb_pred_58 <- predict(gb_model_58, delivery_test_58)
+```
+
+```{r}
+head(linear_pred_20)
+print("*************************************************************")
+head(rf_pred_20)
+print("*************************************************************")
+head(gb_pred_20)
+print("*************************************************************")
+
+head(linear_pred_40)
+print("*************************************************************")
+head(rf_pred_40)
+print("*************************************************************")
+head(gb_pred_40)
+print("*************************************************************")
+
+head(linear_pred_58)
+print("*************************************************************")
+head(rf_pred_58)
+print("*************************************************************")
+head(gb_pred_58)
+```
+
+```{r}
+linear_pred_20 <- unscaling(linear_pred_20,x_bar_20, sigma_x_20)
+rf_pred_20 <- unscaling(rf_pred_20,x_bar_20, sigma_x_20)
+gb_pred_20 <- unscaling(gb_pred_20,x_bar_20, sigma_x_20)
+
+linear_pred_40 <- unscaling(linear_pred_40,x_bar_40, sigma_x_40)
+rf_pred_40 <- unscaling(rf_pred_40,x_bar_40, sigma_x_40)
+gb_pred_40 <- unscaling(gb_pred_40,x_bar_40, sigma_x_40)
+
+linear_pred_58 <- unscaling(linear_pred_58,x_bar_58, sigma_x_58)
+rf_pred_58 <- unscaling(rf_pred_58,x_bar_58, sigma_x_58)
+gb_pred_58 <- unscaling(gb_pred_58,x_bar_58, sigma_x_58)
+```
+
+```{r}
+head(linear_pred_20)
+head(rf_pred_20)
+head(gb_pred_20)
+head(linear_pred_40)
+head(rf_pred_40)
+head(gb_pred_40)
+head(linear_pred_58)
+head(rf_pred_58)
+head(gb_pred_58)
+```
+
+## RMSE
+
+```{r}
+data.frame(
+  No_of_Variables = c(20,40,58),
+  Linear.RMSE = c(sqrt(mean((delivery_train_20$actual_delivery_duration - linear_pred_20)^2)),
+                  sqrt(mean((delivery_train_40$actual_delivery_duration - linear_pred_40)^2)),
+                  sqrt(mean((delivery_train_58$actual_delivery_duration - linear_pred_58)^2))),
+  Random_forest.RMSE = c(sqrt(mean((delivery_train_20$actual_delivery_duration - rf_pred_20)^2)),
+                         sqrt(mean((delivery_train_40$actual_delivery_duration - rf_pred_40)^2)),
+                         sqrt(mean((delivery_train_58$actual_delivery_duration - rf_pred_58)^2))),
+  Gradient_boost.RMSE = c(sqrt(mean((delivery_train_20$actual_delivery_duration - gb_pred_20)^2)),
+                          sqrt(mean((delivery_train_40$actual_delivery_duration - gb_pred_40)^2)),
+                          sqrt(mean((delivery_train_58$actual_delivery_duration - gb_pred_58)^2)))
+)
+```
+
+<https://doordash.engineering/2021/04/28/improving-eta-prediction-accuracy-for-long-tail-events/>
